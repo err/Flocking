@@ -1,0 +1,309 @@
+(ns flocking.core
+  (:use [flocking.boid]
+	[flocking.utils]
+	[flocking.events]
+	[flocking.protocols]
+	[rosado.processing]
+	[rosado.processing.applet]))
+
+
+(def *screen-width*    1000)
+(def *screen-height*   1000)
+(def *bg-color*         255)
+(def *time*        (atom 0))
+
+(def *mouse-button*     (atom nil))
+(def *mouse-position* (atom [0 0]))
+
+
+
+(def *flock* (ref []))
+(def *boid-count* (atom 0))
+(def *default-flock-size*  10)
+(def *maximum-flock-size* 100)
+
+(def *min-speed* 0.15)
+(def *max-speed*   15)
+(def *max-accel*   15)
+
+(def *fc-radius*     ) ;flock-centering radius
+(def *ca-radius*     ) ;collision-avoidance radius
+(def *vm-radius*     ) ;velocity-matching radius
+
+
+;; these flags are set in the toggle function
+(def *fc-force*   (atom true))
+(def *vm-force*   (atom true))
+(def *ca-force*   (atom true))
+(def *wa-force*   (atom true))
+(def *running?*   (atom true))
+(def *attract?*   (atom true))
+(def *show-path?* (atom true))
+(def *clear-once* (atom false))
+
+
+(defn make-random-boid [id]
+  (let [pos  [(* *screen-width*  (rand 1))
+	      (* *screen-height* (rand 1))]
+	vel  [(+ (* (dec *max-speed*) (dec (rand 2))) *min-speed*)
+	      (+ (* (dec *max-speed*) (dec (rand 2))) *min-speed*)]]
+    (make-boid id pos vel)))
+
+(defn init-flock
+  ([]
+     (init-flock *default-flock-size*))
+  ([flock-size]
+     (let [count @*boid-count*
+	   size  (or (and (<= flock-size *maximum-flock-size*) flock-size)
+		     *default-flock-size*)
+	   flock (for [id (range count (+ count size))]
+		   {id #(make-random-boid id)})]
+       (dosync (ref-set *flock* (reduce into flock)))
+       (reset! *boid-count* size))))
+
+
+(defn add-boid
+  ([]
+     (let [id @*boid-count*]
+       (dosync (alter *flock* assoc id (make-random-boid id)))
+       (swap! *boid-count* inc))))
+
+(defn remove-boid
+  ([]
+     (let [id (rand-nth (keys @*flock*))]
+       (remove-boid id)))
+  ([id]
+     (dosync (alter *flock* dissoc id))))
+
+;; TODO: scatter but preserve velocity?
+(defn scatter [b]
+  (make-random-boid (:id boid))) 
+
+(defn scatter-boids []
+  (dosync (ref-set *flock* (into {} (for [[k v] @*flock*] [k (scatter v)])))))
+
+;;; NOT a reset. Clears the screen on the next frame.
+;; (defn clear-window []
+;;   )
+
+
+(defn toggle [feature]
+  (let [flag (case feature
+		   :flock-centering     *fc-force*
+		   :velocity-matching   *vm-force*
+		   :collision-avoidance *ca-force*
+		   :clear-once          *clear-once*
+		   :wandering           *wa-force*
+		   :pause               *running?*
+		   :path                *show-path?*
+
+		   (:attract :repulse)  [*attract?*  feature])]
+    (if (vector? flag)
+      (let [[flag value] flag]
+	(reset! flag value))
+      (swap! flag not))))
+
+
+
+(let [width *screen-width*
+      height *screen-height*
+      diagonal (sqrt (+ (sq width) (sq height)))]
+
+  (defn- dist* [p q w h]
+    (let [[px py] p
+	  [qx qy] q
+	  dx (abs (- px qx))
+	  dy (abs (- py qy))]
+      [(lesser-of dx (- w dx)) (lesser-of dy (- h dy))]))
+
+  (defn dist-squared [p q]
+    (let [[x y] (dist* p q width height)]
+      (+ (sq x) (sq y))))
+
+  (defn dist [p q]
+    (let [[x y] (dist* p q width height)]
+      (sqrt (+ (sq x) (sq y)))))  
+
+  (defn- in-range? [pos1 pos2 radius]
+    (< (dist-squared pos1 pos2) (sq radius)))
+  
+  (defn- neighbors* [pos flock radius wrapped?]
+    (if wrapped?
+      (filter #(and (not= pos (:pos %))
+		    (in-range? pos (:pos %) radius))
+	      flock)))
+
+  (defn neighbors
+    "Returns a seq of boids within radius from pos. Note that the world is toroidal, hence the :wrapped flag"
+    [boid radius]
+    (neighbors* (:pos boid) (vals @*flock*) radius :wrapped)))
+
+
+;;;; calculating forces
+
+;; collision-avoidance
+(defn f-ca [b]
+  ;; find neighbors in radius
+  (let [nb (neighbors b *ca-radius*)]
+    ;; calculate (weighted) force for each neighbor
+    ))
+
+;; velocity-matching
+(defn f-vm [b]
+  (let [nb (neighbors b *vm-radius*)]
+    ))
+
+;; flock-centering
+(defn f-fc [b]
+  (let [nb (neighbors b *fc-radius*)]
+    ))
+
+;; wandering
+(defn f-wd [b]
+  )
+
+(defn update-boid [b]
+  ;; calculate F-new
+  (+ (* ca-weight (f-ca b))
+     (* vm-weight (f-vm b))
+     (* fc-weight (f-fc b))
+     (* wd-weight (f-wd b)))
+
+  ;; calculate V-new
+					;vf = vo + at
+  ;; calculate P-new
+					;pf = po + vt
+  )
+
+(defn- update-flock* [flock]
+  (into {} (keys flock) (map update-boid (vals flock))))
+
+(defn update-flock []
+  (dosync (alter *flock* update-flock*)))
+
+(defn update []
+  (update-boids)
+  (swap! *time* inc))
+
+(defn maybe-draw-background []
+  (if (or (and @*clear-once*
+	       (or (swap! *clear-once* not) true))
+	  (not @*show-path?*))
+    (background 55)))
+
+(defn draw-boids []
+  (dorun (map draw-obj @*flock*)))
+
+(defn draw []
+  (maybe-draw-background)
+  (draw-boids)
+  (update))
+
+
+	  
+
+
+;;;; User Interaction
+(defn mouse-moved [evt]
+  (let [x (.getX evt)
+	y (.getY evt)]
+    (reset! *mouse-position* [x y])))							    
+
+(defn mouse-pressed [evt]
+  (let [x (.getX evt)
+	y (.getY evt)]
+    ;; (println "type of event: " (type evt))
+    (reset! *mouse-button* true)))
+
+(defn mouse-released [evt]
+  (let [x (.getX evt)
+	y (.getY evt)]
+    (reset! *mouse-button* false)))
+
+(defn mouse-dragged [evt]
+  (let [x (.getX evt)
+	y (.getY evt)]
+    ;; (reset! *mouse-position* [x y])   ;i wasn't doing this in the Life sime
+    ))
+
+(defn key-pressed
+  "Your simulator should act on this group of keyboard commands:
+
+   a,A - Switch to attraction mode (for when mouse is held down).
+   r,R - Switch to repulsion mode (for when mouse is held down).
+   s,S - Cause all creatures to be instantly scattered to random positions in the window.
+   p,P - Toggle whether to have creatures leave a path, that is, whether the window is cleared each display step or not.
+   c,C - Clear the window (useful when creatures are leaving paths).
+   1 - Toggle the flock centering forces on/off.
+   2 - Toggle the velocity matching forces on/off.
+   3 - Toggle the collision avoidance forces on/off.
+   4 - Toggle the wandering force on/off.
+   + - Add one new creature to the simulation. You should allow up to 100 creatures to be created.
+   - (minus sign) - Remove one new creature from the simulation (unless there are none already).
+   SPACE - Start or stop the simulation (toggle between these)."
+  [evt]
+  (let [char (.getKeyChar evt)]
+    (case char
+	  (\a \A) (toggle :attract)
+	  
+	  (\r \R) (toggle :repulse)
+
+	  (\s \S) (scatter-boids)
+
+	  (\p \P) (toggle :path)
+
+	  (\c \C) (toggle :clear-once)
+
+	  (\1)    (toggle :flock-centering)
+
+	  (\2)    (toggle :velocity-matching)
+
+	  (\3)    (toggle :collision-avoidance)
+
+	  (\4)    (toggle :wandering)
+	  
+	  (\+)    (add-boid)
+
+	  (\-)    (remove-boid)	  
+
+	  \space  (if (= @*mode*  :run)
+		      (switch-mode :pause)
+		      (step))
+
+	  :unrecognized-key-command)))
+
+
+
+(defn setup
+  "executes once."
+  []
+  (println ";;;;;;;;;;;;;;;;____________;;;;;;;;;;;;;;;;")
+  (println ";;;;;;;;;;;;;;;;|=Flocking=|;;;;;;;;;;;;;;;;")
+  (println ";;;;;;;;;;;;;;;;|__________|;;;;;;;;;;;;;;;;")
+  (smooth)
+  ;; (background-float 200 200 255)
+  
+  (framerate 60)
+  (reset! *time* 0)
+  (reset! *boid-count* 0)
+  ;; (reset! *debug-font* (load-font "Monaco-10.vlw"))
+  )
+
+
+(defapplet flock
+  :title "Caspary's Flocking Sim!"
+  :setup setup
+  :draw draw
+  :size [*screen-width*  *screen-height*]
+  :mouse-moved mouse-moved
+  :mouse-pressed mouse-pressed
+  :mouse-released mouse-released
+  :mouse-dragged mouse-dragged
+  :key-pressed key-pressed
+  :key-released key-released)
+
+;; (defn -main [& args]
+;;   (run flock))
+
+;; (run flock :interactive)
+;; (stop flock)
