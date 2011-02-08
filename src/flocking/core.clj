@@ -63,10 +63,10 @@
 ;;;; WEIGHTS
 ;;; TODO: add knobs/sliders for
 ;;; adjusting these parameters
-(def *ca-weight*   60)
-(def *vm-weight*   50)
-(def *fc-weight*   40)
-(def *wa-weight*   100)
+(def *ca-weight*   20)
+(def *vm-weight*   20)
+(def *fc-weight*   10)
+(def *wa-weight*   30)
 (def *usr-weight*  200)
 
 (defn make-random-boid [id]
@@ -378,7 +378,7 @@
 	(no-stroke)
       
 	(when @*vm-force?*
-	  (stroke 4)
+	  (stroke 80 70 180)
 	  (stroke-weight 1)
 	  (no-fill) ;; (fill-float 240 20 20 66)
 	  (ellipse 0 0 *vm-radius* *vm-radius*))
