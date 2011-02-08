@@ -52,21 +52,22 @@
 (def *min-speed*  0.15)
 (def *max-speed*     6)
 (def *max-accel*   1.1)
+(def *max-attract*   8)
 
 ;;;; RADII
 ;;;
-(def *fc-radius*   280) ;flock-centering radius
-(def *ca-radius*   100) ;collision-avoidance radius
-(def *vm-radius*   260) ;velocity-matching radius
+(def *fc-radius*    60) ;flock-centering radius
+(def *ca-radius*    35) ;collision-avoidance radius
+(def *vm-radius*    160) ;velocity-matching radius
 
 ;;;; WEIGHTS
 ;;; TODO: add knobs/sliders for
 ;;; adjusting these parameters
-(def *ca-weight*   30)
+(def *ca-weight*   60)
 (def *vm-weight*   50)
-(def *fc-weight*   50)
-(def *wa-weight*   80)
-(def *usr-weight*   4)
+(def *fc-weight*   40)
+(def *wa-weight*   100)
+(def *usr-weight*  200)
 
 (defn make-random-boid [id]
   (let [pos  [(* *screen-width*  (rand 1))
@@ -161,16 +162,20 @@
   (defn- in-range? [pos1 pos2 radius]
     (< (distance-squared pos1 pos2) (sq radius)))
   
-  (defn- neighbors* [pos flock radius wrapped?]
-    (if wrapped?
-      (filter #(and (not= pos (:pos %))
-		    (in-range? pos (:pos %) radius))
-	      flock)))
+  (defn- neighbors* [boid flock radius] ;wrapped?]
+					;(if wrapped?
+    (filter #(and (not= (:id boid) (:id %))
+		  (in-range? (:pos boid) (:pos %) radius))
+	    flock)
+					;)
+    )
 
   (defn neighbors
-    "Returns a seq of boids within radius from pos. Note that the world is toroidal, hence the :wrapped flag"
+    "Returns a seq of boids within radius from pos.
+      Note that the world is toroidal, hence the :wrapped flag"
     [boid radius]
-    (neighbors* (:pos boid) (vals @*flock*) radius :wrapped)))
+    (neighbors* boid (vals @*flock*) radius ;; :wrapped
+		)))
 
 
 ;;;; calculating forces
@@ -249,7 +254,16 @@
 					  (dec (rand 2)))))))
 
 (defn f-usr [b]
-  (let [displ (displacement (:pos b) @*mouse-position*)]
+  (let [[dx dy] (displacement (:pos b) @*mouse-position*)
+	dx (if (< *max-attract* (abs dx))
+		 (or (and (neg? dx) (- *max-attract*))
+		     dx)
+		 dx)
+	dy (if (< *max-attract* (abs dy))
+	     (or (and (neg? dy) (- *max-attract*))
+		 dy)
+	     dy)
+	displ [dx dy]]
     (case @*attract?*
 	  :attract displ
 	  :repulse (vec (map - displ))
@@ -281,14 +295,14 @@
 			(/ (second sum-f)   sum-wts
 			   ))]
 
-    (when (zero? (mod @*time* 10))
-      (println [:fca fca
-    		:fvm fvm
-    		:ffc ffc
-    		:fwa fwa
-    		:sum-f sum-f
-    		:sum-wts sum-wts
-    		:net-frc net-frc]))
+    ;; (when (zero? (mod @*time* 10))
+    ;;   (println [:fca fca
+    ;; 		:fvm fvm
+    ;; 		:ffc ffc
+    ;; 		:fwa fwa
+    ;; 		:sum-f sum-f
+    ;; 		:sum-wts sum-wts
+    ;; 		:net-frc net-frc]))
     net-frc))
 
 (defn v-next [boid accel dt]
@@ -344,7 +358,7 @@
 (defn draw-boid [b]
   (let [[xp yp] (:pos b)
 	r (radius b)]
-    (fill-float 150 88 220)
+    (fill-float 150 88 220 80)
     (ellipse-mode RADIUS)
     (with-translation [xp yp]
       (with-rotation  [(+ HALF_PI (dir b))]
@@ -412,36 +426,7 @@
     (reset! *mouse-position* [x y])   ;i wasn't doing this in the Life sime
     ))
 
-(defn key-released [evt]
-  ;; (let [char (.getKeyChar evt)]
-  ;;   (println "key pressed: " char)
-  ;;   (case char
-  ;; 	  (\a \A) (toggle :attract)
-	  
-  ;; 	  (\r \R) (toggle :repulse)
-
-  ;; 	  (\p \P) (toggle :path)
-
-  ;; 	  (\c \C) (toggle :clear-once)
-
-  ;; 	  (\1)    (toggle :flock-centering)
-
-  ;; 	  (\2)    (toggle :velocity-matching)
-
-  ;; 	  (\3)    (toggle :collision-avoidance)
-
-  ;; 	  (\4)    (toggle :wandering)
-
-  ;; 	  \space  (toggle :pause)
-	  
-  ;; 	  (\+)    (add-boid)
-
-  ;; 	  (\-)    (remove-boid)
-
-  ;; 	  (\s \S) (scatter-boids)
-
-  ;; 	  :unrecognized-key-command!))
-  )
+(defn key-released [evt])
 
 (defn key-pressed
   "Your simulator should act on this group of keyboard commands:
@@ -503,16 +488,16 @@
   (println ";;;;;;;;;;;;;;;;|=Flocking=|;;;;;;;;;;;;;;;;")
   (println ";;;;;;;;;;;;;;;;|__________|;;;;;;;;;;;;;;;;")
   (smooth)
-  (draw-background)
-  (framerate 30)
   (init-flock)
+  (framerate 30)
+  (draw-background)
   (reset! *time* 0)
   (reset! *boid-count* 0)
   ;; (reset! *debug-font* (load-font "Monaco-10.vlw"))
   )
 
 
-(defapplet flock
+(defapplet flocking
   :title "Caspary's Flocking Sim!"
   :setup setup
   :draw draw
@@ -525,7 +510,7 @@
   :key-released key-released)
 
 ;; (defn -main [& args]
-;;   (run flock))
+;;   (run flocking))
 
-;; (run flock :interactive)
-;; (stop flock)
+;; (run flocking :interactive)
+;; (stop flocking)
