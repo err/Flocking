@@ -3,7 +3,7 @@
 (defprotocol Particle
   (pos  [x] "[x y] coordinates")
   (vel  [x] "component vectors for velocity")
-  (acc  [x] "component vectors for acceleration")
+  ;; (acc  [x] "component vectors for acceleration")
   (dir  [x] "orientation of the object (in radians, where 0 is straight-up)")
   (mass [x] "mass of the physical object"))
 

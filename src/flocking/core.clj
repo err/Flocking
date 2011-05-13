@@ -1,14 +1,17 @@
 (ns flocking.core
   (:use [flocking.boid]
 	[flocking.utils]
-	[flocking.events]
 	[flocking.protocols]
 	[rosado.processing]
-	[rosado.processing.applet]))
+	[rosado.processing.applet]
+	[flocking.socks])
+  (:gen-class))
 
 
-(def *screen-width*    1000)
-(def *screen-height*   1000)
+(def *screen-width*     800)
+(def *screen-height*    800)
+(def *panel-width*      800)
+(def *panel-height*     860)
 (def *bg-color*         255)
 (def *time*        (atom 0))
 
@@ -16,12 +19,8 @@
 (def *mouse-position* (atom [0 0]))
 
 
-
 (def *flock* (ref []))
 (def *boid-count* (atom 0))
-
-
-
 
 ;; these flags are set in the toggle function
 (def *fc-force?*   (atom true))
@@ -29,9 +28,9 @@
 (def *ca-force?*   (atom true))
 (def *wa-force?*   (atom true))
 (def *attract?*    (atom :attract))
-(def *show-path?*  (atom true))
+(def *show-path?*  (atom false))
 (def *clear-once*  (atom false))
-(def *running?*    (atom false))
+(def *running?*    (atom true))
 (def *draw-fields* (atom false))
 
 
@@ -49,31 +48,94 @@
 (def *default-flock-size*  10)
 (def *maximum-flock-size* 100)
 
-(def *min-speed*  0.15)
-(def *max-speed*     6)
-(def *max-accel*   1.1)
-(def *max-attract*   8)
+;; (def *min-speed*  0.15)
+;; (def *max-speed*   9.4)
+;; (def *max-accel*   3.1)
+;; (def *max-attract*   3)
 
-;;;; RADII
-;;;
-(def *fc-radius*    60) ;flock-centering radius
-(def *ca-radius*    35) ;collision-avoidance radius
-(def *vm-radius*    160) ;velocity-matching radius
+;; ;;;; RADII
+;; ;;;
+;; (def *fc-radius*     80) ;flock-centering radius
+;; (def *ca-radius*     40) ;collision-avoidance radius
+;; (def *vm-radius*     80) ;velocity-matching radius
 
-;;;; WEIGHTS
-;;; TODO: add knobs/sliders for
-;;; adjusting these parameters
-(def *ca-weight*   20)
-(def *vm-weight*   20)
-(def *fc-weight*   10)
-(def *wa-weight*   30)
-(def *usr-weight*  200)
+;; ;;;; WEIGHTS
+;; ;;; TODO: add knobs/sliders for
+;; ;;; adjusting these parameters
+;; (def *ca-weight*   1.40)
+;; (def *vm-weight*   0.78)
+;; (def *fc-weight*   0.60)
+;; (def *wa-weight*   0.17)
+;; (def *usr-weight*  3200)
+
+
+
+(def *SLIDERS*                  (ref {}))
+(def *GUI*     (make-frame "PARAMETERS"))
+
+;; ui-tools
+(defmacro defslider [ref val label]
+  `(let [s# (slider #(dosync (ref-set ~ref %))
+		   (range 0 (* 2 ~val) (if (integer? ~val) 1 0.01))
+		   ~label
+		   ~val)]
+     (dosync (alter *SLIDERS* assoc (count @*SLIDERS*) s#))))
+
+(defmacro defparam [name val]
+  `(do
+     (def ~name (ref ~val))
+     (defslider ~name ~val (name '~name))))
+
+(defmacro defparams [binds]
+  `(do
+     ~@(map (fn [[k v]]
+	      `(defparam ~k ~v))
+	    binds)))
+
+
+(defparams [[*fc-radius*        80]
+	    [*ca-radius*        40]
+	    [*vm-radius*        80]
+	    [*ca-weight*      1.00]
+	    [*vm-weight*      1.00]
+	    [*fc-weight*      1.00]
+	    [*wa-weight*      1.00]
+	    [*usr-weight*     1.00]
+	    [*min-speed*      0.15]
+	    [*max-speed*       9.5]
+	    [*max-accel*       3.0]
+	    [*max-attract*     3.0]])
+
+
+(defn display-parameter-window []
+  (.display *GUI* (apply stack (concat 
+				(vals @*SLIDERS*)
+				[(label "Press SPACE to (un)PAUSE")]))))
+
+
+;;;; Status Messages
+(def *font* (atom nil))
+
+(defn status-msg []
+  (apply str
+	 (concat "Boids: "     (str (count @*flock*))
+		 "  Centering: " (if @*fc-force?* "on" "off")
+		 "  Velocity Matching: " (if @*vm-force?* "on" "off")
+		 "  Collsions: " (if @*ca-force?* "on" "off")
+		 "  Wandering: " (if @*wa-force?* "on" "off"))))
+
+(defn draw-msg [x y]
+  (with-translation [x y]
+    (text-font @*font* 14)
+    (text-align LEFT)
+    (fill 250)
+    (string->text (status-msg) 0 0)))
 
 (defn make-random-boid [id]
   (let [pos  [(* *screen-width*  (rand 1))
 	      (* *screen-height* (rand 1))]
-	vel  [(+ (* (dec *max-speed*) (dec (rand 2))) *min-speed*)
-	      (+ (* (dec *max-speed*) (dec (rand 2))) *min-speed*)]]
+	vel  [(+ (* (dec @*max-speed*) (dec (rand 2))) @*min-speed*)
+	      (+ (* (dec @*max-speed*) (dec (rand 2))) @*min-speed*)]]
     (make-boid id pos vel)))
 
 (defn init-flock
@@ -91,8 +153,8 @@
 (defn add-boid
   ([]
      (let [id @*boid-count*]
-       (dosync (alter *flock* assoc id (make-random-boid id)))
-       (swap! *boid-count* inc))))
+       (dosync (alter *flock* assoc id (make-random-boid id))
+	       (swap! *boid-count* inc)))))
 
 (defn remove-boid
   ([]
@@ -138,10 +200,10 @@
     [p q w h]
     (let [[px py] p
 	  [qx qy] q
-	  dx (- qx px)
-	  dy (- qy py)
-	  dx (if (< (abs dx) (- w dx)) dx (- w dx))
-	  dy (if (< (abs dy) (- w dy)) dy (- w dy))]
+	  dx (- qx px) adx (abs dx)
+	  dy (- qy py) ady (abs dy)
+	  dx (if (< adx (dec (- w adx))) dx (- w adx))
+	  dy (if (< ady (dec (- h ady))) dy (- h ady))]
       [dx dy]))
 
   (defn distance-squared [p q]
@@ -162,20 +224,17 @@
   (defn- in-range? [pos1 pos2 radius]
     (< (distance-squared pos1 pos2) (sq radius)))
   
-  (defn- neighbors* [boid flock radius] ;wrapped?]
-					;(if wrapped?
+  (defn- neighbors*
+    "Assumes the world is toroidal"
+    [boid flock radius] 
     (filter #(and (not= (:id boid) (:id %))
 		  (in-range? (:pos boid) (:pos %) radius))
-	    flock)
-					;)
-    )
+	    flock))
 
   (defn neighbors
-    "Returns a seq of boids within radius from pos.
-      Note that the world is toroidal, hence the :wrapped flag"
+    "Returns a seq of boids within radius from pos."
     [boid radius]
-    (neighbors* boid (vals @*flock*) radius ;; :wrapped
-		)))
+    (neighbors* boid (vals @*flock*) radius)))
 
 
 ;;;; calculating forces
@@ -184,7 +243,7 @@
 (defn f-ca [b]
   (let [pos (:pos b)
 	epsilon 0.03
-	neighbs (neighbors b *ca-radius*)]
+	neighbs (neighbors b @*ca-radius*)]
     (if (zero? (count neighbs))
       [0 0]
       (let [weights (map #(/ 1 (+ epsilon (distance pos (:pos %)))) neighbs)
@@ -200,10 +259,12 @@
 	[(/ (first net-frc) sum-wts) (/ (second net-frc) sum-wts)]))))
 
 ;;; Velocity Matching
+
+;;; TODO
 (defn f-vm [b]
   (let [pos (:pos b)
 	epsilon 0.03
-	neighbs (neighbors b *vm-radius*)]
+	neighbs (neighbors b @*vm-radius*)]
     (if (zero? (count neighbs))
       [0 0]
       (let [weights (map #(/ 1 (+ epsilon (distance pos (:pos %)))) neighbs)
@@ -223,7 +284,7 @@
 (defn f-fc [b]
   (let [pos (:pos b)
 	epsilon 0.03
-	neighbs (neighbors b *fc-radius*)]
+	neighbs (neighbors b @*fc-radius*)]
     (if (zero? (count neighbs))
       [0 0]
       (let [weights (map #(/ 1 (+ epsilon (distance pos (:pos %)))) neighbs)
@@ -241,7 +302,7 @@
 ;;;; TODO: weighted-sum rewrite
 ;; (weighted-sum :obj       boid
 ;; 	      :slot      :pos
-;; 	      :neighbors (neighbors b *ca-radius*)
+;; 	      :neighbors (neighbors b @*ca-radius*)
 ;; 	      :weight-fn #(/ 1 (+ epsilon (distance (:pos %1) (:pos %2))))
 ;; 	      :attract?  :attract)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -255,13 +316,13 @@
 
 (defn f-usr [b]
   (let [[dx dy] (displacement (:pos b) @*mouse-position*)
-	dx (if (< *max-attract* (abs dx))
-		 (or (and (neg? dx) (- *max-attract*))
-		     dx)
+	dx (if (< @*max-attract* (abs dx))
+		 (or (and (neg? dx) (- @*max-attract*))
+		     @*max-attract*)
 		 dx)
-	dy (if (< *max-attract* (abs dy))
-	     (or (and (neg? dy) (- *max-attract*))
-		 dy)
+	dy (if (< @*max-attract* (abs dy))
+	     (or (and (neg? dy) (- @*max-attract*))
+		 @*max-attract*)
 	     dy)
 	displ [dx dy]]
     (case @*attract?*
@@ -270,11 +331,11 @@
 	  	  )))
 
 (defn f-next [b]
-  (let [fca   [*ca-force?* *ca-weight*  (f-ca b)] ;collision-avoidance
-	fvm   [*vm-force?* *vm-weight*  (f-vm b)] ;velocity-matching
-	ffc   [*fc-force?* *fc-weight*  (f-fc b)] ;flock-centering
-	fwa   [*wa-force?* *wa-weight*  (f-wa b)] ;wandering
-	usr   [*mouse-dn?* *usr-weight* (f-usr b)] ;mouse-click 
+  (let [fca   [*ca-force?* @*ca-weight*  (f-ca b)] ;collision-avoidance
+	fvm   [*vm-force?* @*vm-weight*  (f-vm b)] ;velocity-matching
+	ffc   [*fc-force?* @*fc-weight*  (f-fc b)] ;flock-centering
+	fwa   [*wa-force?* @*wa-weight*  (f-wa b)] ;wandering
+	usr   [*mouse-dn?* @*usr-weight* (f-usr b)] ;mouse-click 
 	sum-f (reduce (fn [[sum-x sum-y]
 			   [toggle weight [x y]]]
 			(if @toggle
@@ -285,15 +346,13 @@
 	sum-wts (reduce (fn [sum [toggle weight]]
 			  (+ sum (if @toggle weight 0)))
 			0
-			[[*ca-force?* *ca-weight*]
-			 [*vm-force?* *vm-weight*]
-			 [*fc-force?* *fc-weight*]
-			 [*wa-force?* *wa-weight*]
-			 [*mouse-dn?* *usr-weight*]])
-	net-frc (vector (/ (first  sum-f)   sum-wts
-			   )
-			(/ (second sum-f)   sum-wts
-			   ))]
+			[[*ca-force?* @*ca-weight*]
+			 [*vm-force?* @*vm-weight*]
+			 [*fc-force?* @*fc-weight*]
+			 [*wa-force?* @*wa-weight*]
+			 [*mouse-dn?* @*usr-weight*]])
+	net-frc (vector (/ (first  sum-f) (if (zero? sum-wts) 1  sum-wts))
+			(/ (second sum-f) (if (zero? sum-wts) 1  sum-wts)))]
 
     ;; (when (zero? (mod @*time* 10))
     ;;   (println [:fca fca
@@ -321,8 +380,8 @@
   (let [dt 1.0
 	f-new   (f-next b)
 	[vx vy] (v-next b f-new dt)
-	v-new   [(constrain vx (- *max-speed*) *max-speed*)
-		 (constrain vy (- *max-speed*) *max-speed*)]
+	v-new   [(constrain vx (- @*max-speed*) @*max-speed*)
+		 (constrain vy (- @*max-speed*) @*max-speed*)]
 	p-new   (p-next b v-new dt)]
     
     ;; (when (zero? (mod @*time* 10))
@@ -342,7 +401,9 @@
 ;;;; Updating
 (defn update []
   (update-flock)
-  (swap! *time* inc))
+  (swap! *time* inc)
+  ;; (increment-msg-timer)
+  )
 
 ;;;; Rendering
 ;; (defn maybe-draw-background []
@@ -353,7 +414,102 @@
 ;;       (background-float 200 200 255))))
 
 (defn draw-background []
-  (background-float 200 200 255))
+  ;; (background-float 200 200 255)
+  (background 0)
+  (color-mode RGB)
+  (fill-float 200 200 255)
+  (rect 0 0 *screen-width* *screen-height*))
+
+(defn draw-msg-background []
+  (with-translation [0 *screen-height*]
+    (rect-mode CORNER)
+    (fill 0)
+    (rect 0 0 *panel-width* (- *panel-height* *screen-height*))))
+
+
+
+;;ringseqs [feed to rads*]
+
+(def erste-ringseq (concat (range 0 60 16) (range 60 120 8) (range 120 160 4)))
+
+;; (take 40 (iterate #(cond (< % 70) (+ % 0.3)
+;; 			 (< % 80) (+ % 3.4)
+;; 			 (< % 90) (+ % 5.5)
+;; 			 :true    (+ % 9.9)) 50))
+
+
+;;trippy rings
+(def *max-age* 120)
+(let [rads*  (ref (cycle (concat erste-ringseq (reverse erste-ringseq))))]
+   (defn next-rad []
+     (dosync
+      (let [a (first @rads*)]
+	(alter rads* next)
+	a))))
+
+(defn draw-ring [x y r1 r2 c1 c2 c3 a]
+  (fill-float   c1 c2 c3 a)
+   ;; (stroke-float c1 c2 c3 a)
+   ;; (stroke-weight (max (/ r2 4) 0))
+  (no-stroke)
+  (ellipse 0 0 r1 r2))
+
+(let [angles* (ref (cycle (range 0 TWO_PI (/ TWO_PI 360))))]
+  (defn next-angle1 []
+    (dosync
+     (let [a (first @angles*)]
+       (alter angles* next)
+       a))))
+
+(defn draw-ring-cluster [[ring color1 color2]]
+  (when ring
+    (let [tmp (next-rad)
+	  tmp-angle (next-angle1)
+	  [x y] (:pos ring)
+	  {h1 :h, s1 :s, b1 :b} color1
+	  {h2 :h, s2 :s, b2 :b} color2
+	  [r1 r2] [(- tmp 30) (abs (- *max-age* tmp 30))]
+	  a (max (- 0.9  (/ tmp 120)) 0)
+	  time (mod @*time* 16)]
+      (color-mode HSB 1.0)
+      (ellipse-mode CENTER)
+      (with-translation [x y]
+	(with-rotation [(* TWO_PI (/ tmp ;; (age ring)
+			  	       *max-age*))
+			;; tmp-angle
+			]
+	  (draw-ring 0 0 r1 r2 h1 s1 b1 a)
+	  (draw-ring 0 0 r2 r1 h2 s2 b2 a)
+	  (with-rotation [;; tmp-angle
+			  (* TWO_PI (/ tmp ;; (age ring)
+			  	       *max-age*))
+			  ]
+	    (with-translation [r1 r1]
+	      (draw-ring 0 0 (/ r1 2) (/ r2 2) h1 s1 b1 a)
+	      (draw-ring 0 0 (/ r2 2) (/ r1 2) h2 s2 b2 a)))
+	  (with-rotation [;; tmp-angle
+			  (* TWO_PI (/ tmp ;; (age ring)
+			  	       *max-age*))
+			  ]
+	    (with-translation [(- r1) r1]
+	      (draw-ring 0 0 (/ r1 2) (/ r2 2) h1 s1 b1 a)
+	      (draw-ring 0 0 (/ r2 2) (/ r1 2) h2 s2 b2 a)))
+	  (with-rotation [;; tmp-angle
+			  (* TWO_PI (/ tmp ;; (age ring)
+			  	       *max-age*))
+			  ]
+	    (with-translation [r1 (- r1)]
+	      (draw-ring 0 0 (/ r1 2) (/ r2 2) h1 s1 b1 a)
+	      (draw-ring 0 0 (/ r2 2) (/ r1 2) h2 s2 b2 a)))
+	  (with-rotation [;; tmp-angle
+			  (* TWO_PI (/ tmp ;; (age ring)
+			  	       *max-age*))
+			  ]
+	    (with-translation [(- r1) (- r1)]
+	      (draw-ring 0 0 (/ r1 2) (/ r2 2) h1 s1 b1 a)
+	      (draw-ring 0 0 (/ r2 2) (/ r1 2) h2 s2 b2 a))))))))
+
+
 
 (defn draw-boid [b]
   (let [[xp yp] (:pos b)
@@ -379,27 +535,35 @@
       
 	(when @*vm-force?*
 	  (stroke 80 70 180)
-	  (stroke-weight 1)
+	  (stroke-weight 2)
 	  (no-fill) ;; (fill-float 240 20 20 66)
-	  (ellipse 0 0 *vm-radius* *vm-radius*))
+	  (ellipse 0 0 @*vm-radius* @*vm-radius*))
       
 	(when @*ca-force?*
-	  (fill-float 0 170 130 66)
-	  
-	  (ellipse 0 0 *ca-radius* *ca-radius*))
+	  (fill-float 120 120 255  66)
+	  ;; (no-fill)
+	  (ellipse 0 0 @*ca-radius* @*ca-radius*))
 
 	(when @*fc-force?*
-	  (no-stroke)
-	  (fill-float 255 120 120 66)
-	  (ellipse 0 0 *fc-radius* *fc-radius*))))))
+	  (stroke-float 0 0 0 96)
+	  (no-fill)
+	  (ellipse 0 0 @*fc-radius* @*fc-radius*))))))
 
-(defn draw-boids []
-  (dorun (map draw-boid (vals @*flock*))))
+(defn draw-boids [] (dorun (map draw-boid (vals @*flock*))))
+
+(defn draw-cloids []
+  (dorun (map #(draw-ring-cluster [ %
+				   {:h 0.75 :s 0.75 :b 0.5}
+				   {:h 0.75 :s 0.75 :b 0.5} ])
+	      (vals @*flock*))))
 
 (defn draw []
-  (when (not @*show-path?*)
-    (draw-background))
+  (if (not @*show-path?*)
+    (draw-background)
+    (draw-msg-background))
   (draw-boids)
+  ;; (draw-cloids)
+  (draw-msg 20 (+ *screen-height* 20))
   (when @*running?* (update)))
 
 ;;;; User Interaction
@@ -412,6 +576,8 @@
   (let [x (.getX evt)
 	y (.getY evt)]
     ;; (println "type of event: " (type evt))
+    ;; (if-let [obj (and (not @*held-obj*) (object-at [x y]))]
+    ;;   (dosync (ref-set *held-obj* obj)))
     (reset! *mouse-dn?* true)))
 
 (defn mouse-released [evt]
@@ -423,8 +589,9 @@
   (let [x (.getX evt)
 	y (.getY evt)]
     ;; (println "~~~__ Drag Event __~~~" "  mouse: " [x y])
-    (reset! *mouse-position* [x y])   ;i wasn't doing this in the Life sime
-    ))
+    ;; (if-let [obj @*held-obj*]
+    ;;   (reset-obj-value [x y]))
+    (reset! *mouse-position* [x y]))) ;i wasn't doing this in the Life sime
 
 (defn key-released [evt])
 
@@ -478,9 +645,6 @@
 
 
 
-
-
-
 (defn setup
   "executes once."
   []
@@ -489,19 +653,18 @@
   (println ";;;;;;;;;;;;;;;;|__________|;;;;;;;;;;;;;;;;")
   (smooth)
   (init-flock)
-  (framerate 30)
+  (framerate 17)
   (draw-background)
   (reset! *time* 0)
-  (reset! *boid-count* 0)
-  ;; (reset! *debug-font* (load-font "Monaco-10.vlw"))
-  )
+  (reset! *font* (load-font "Monaco-48.vlw"))
+  (display-parameter-window))
 
 
 (defapplet flocking
   :title "Caspary's Flocking Sim!"
   :setup setup
   :draw draw
-  :size [*screen-width*  *screen-height*]
+  :size [*panel-width* *panel-height*]
   :mouse-moved mouse-moved
   :mouse-pressed mouse-pressed
   :mouse-released mouse-released
@@ -509,8 +672,9 @@
   :key-pressed key-pressed
   :key-released key-released)
 
-;; (defn -main [& args]
-;;   (run flocking))
 
-;; (run flocking :interactive)
+(defn -main [& args]
+  (run flocking))
+
 ;; (stop flocking)
+ (run flocking :interactive)
